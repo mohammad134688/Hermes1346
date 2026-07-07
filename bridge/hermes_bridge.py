@@ -89,33 +89,10 @@ class HermesExecutor:
         self.work_dir = work_dir
 
     def _build_command(self, message: str, session_id: str = "") -> str:
-        """Build the hermes command."""
+        """Build the hermes chat command. All messages (including /commands) go through hermes chat."""
         escaped_msg = message.replace("'", "'\\''")
 
-        # Check for /commands - execute directly, not via chat
-        if message.strip().startswith("/"):
-            parts = message.strip().split(None, 1)
-            cmd_name = parts[0][1:]  # Remove leading /
-            cmd_args = parts[1] if len(parts) > 1 else ""
-            if cmd_args:
-                escaped_args = cmd_args.replace("'", "'\\''")
-
-                return (
-                    f"proot-distro login {self.distro} "
-                    f"--user {self.user} "
-                    f"-- bash -c 'cd {self.work_dir} && "
-                    f"hermes {cmd_name} \"{escaped_args}\" 2>&1'"
-                )
-            else:
-
-                return (
-                    f"proot-distro login {self.distro} "
-                    f"--user {self.user} "
-                    f"-- bash -c 'cd {self.work_dir} && "
-                    f"hermes {cmd_name} 2>&1'"
-                )
-
-        # Regular chat message
+        # All messages go through hermes chat - slash commands are handled internally
         if session_id:
             cmd = (
                 f"proot-distro login {self.distro} "
