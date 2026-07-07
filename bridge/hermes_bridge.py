@@ -92,13 +92,13 @@ class HermesExecutor:
         """Build the hermes chat command. All messages (including /commands) go through hermes chat."""
         escaped_msg = message.replace("'", "'\\''")
 
-        # All messages go through hermes chat - slash commands are handled internally
+        # All messages go through hermes chat with full tool support
         if session_id:
             cmd = (
                 f"proot-distro login {self.distro} "
                 f"--user {self.user} "
                 f"-- bash -c 'cd {self.work_dir} && "
-                f"hermes chat -Q -q \"{escaped_msg}\" "
+                f"hermes chat -Q -q --yolo -t terminal,file,web \"{escaped_msg}\" "
                 f"--resume {session_id} 2>/dev/null'"
             )
         else:
@@ -107,7 +107,7 @@ class HermesExecutor:
                 f"proot-distro login {self.distro} "
                 f"--user {self.user} "
                 f"-- bash -c 'cd {self.work_dir} && "
-                f"hermes chat -Q -q \"{escaped_msg}\" 2>/dev/null'"
+                f"hermes chat -Q -q --yolo -t terminal,file,web \"{escaped_msg}\" 2>/dev/null'"
             )
         return cmd
 
