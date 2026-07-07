@@ -3,6 +3,7 @@ package com.hermes.chat
 import android.content.Intent
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
@@ -98,33 +99,40 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    @Volatile
+    private var streamingBotAdded = false
+
     private fun sendMessage() {
         val message = editMessage.text?.toString()?.trim() ?: return
         if (message.isEmpty() || isSending) return
 
         isSending = true
+        streamingBotAdded = false
         editMessage.text?.clear()
         btnSend.isEnabled = false
 
-        // Add user message
         chatAdapter.addMessage(ChatMessage(content = message, isUser = true))
         scrollToBottom()
-
-        // Show typing indicator
         showTyping(true)
 
-        // Send with streaming
         lifecycleScope.launch {
             hermesClient.sendMessageStream(message, object : HermesClient.StreamCallback {
                 override fun onChunk(text: String) {
-                    runOnUiThread {
-                        // First chunk: hide typing indicator and add empty bot message
-                        if (chatAdapter.getLastMessage()?.isUser == true || chatAdapter.getLastMessage() == null) {
-                            chatAdapter.addMessage(ChatMessage(content = "", isUser = false))
+                    try {
+                        runOnUiThread {
+                            try {
+                                // Add empty bot message on first chunk only
+                                if (!streamingBotAdded) {
+                                    streamingBotAdded = true
+                                    chatAdapter.addMessage(ChatMessage(content = "", isUser = false))
+                                }
+                                chatAdapter.appendToLastMessage(text)
+                                scrollToBottom()
+                            } catch (e: Exception) {
+                                Log.e("HermesChat", "Chunk UI error: ${e.message}")
+                            }
                         }
-                        chatAdapter.appendToLastMessage(text)
-                        scrollToBottom()
-                    }
+                    } catch (_: Exception) { }
                 }
 
                 override fun onComplete(
@@ -133,61 +141,74 @@ class MainActivity : AppCompatActivity() {
                     success: Boolean,
                     error: String?
                 ) {
-                    runOnUiThread {
-                        showTyping(false)
-                        isSending = false
-                        btnSend.isEnabled = true
+                    try {
+                        runOnUiThread {
+                            try {
+                                showTyping(false)
+                                isSending = false
+                                btnSend.isEnabled = true
 
-                        when {
-                            error == "connection_error" -> {
-                                // Remove the empty bot message if added
-                                if (chatAdapter.getLastMessage()?.content?.isEmpty() == true
-                                    && chatAdapter.getLastMessage()?.isUser == false) {
-                                    chatAdapter.removeLastMessage()
+                                when {
+                                    error == "connection_error" -> {
+                                        // Only remove if we added an empty bot message
+                                        if (streamingBotAdded) {
+                                            chatAdapter.removeLastMessage()
+                                        }
+                                        chatAdapter.addMessage(
+                                            ChatMessage(
+                                                content = getString(R.string.error_server),
+                                                isUser = false,
+                                                isError = true
+                                            )
+                                        )
+                                    }
+                                    error == "timeout" -> {
+                                        if (streamingBotAdded) {
+                                            chatAdapter.removeLastMessage()
+                                        }
+                                        chatAdapter.addMessage(
+                                            ChatMessage(
+                                                content = getString(R.string.response_timeout),
+                                                isUser = false,
+                                                isError = true
+                                            )
+                                        )
+                                    }
+                                    success && response.isNotEmpty() -> {
+                                        if (sessionId.isNotEmpty()) {
+                                            settingsManager.sessionId = sessionId
+                                        }
+                                        // Update the streaming message with final clean response
+                                        if (streamingBotAdded) {
+                                            chatAdapter.updateLastMessage(response)
+                                        } else {
+                                            chatAdapter.addMessage(
+                                                ChatMessage(content = response, isUser = false)
+                                            )
+                                        }
+                                    }
+                                    else -> {
+                                        if (streamingBotAdded) {
+                                            chatAdapter.removeLastMessage()
+                                        }
+                                        chatAdapter.addMessage(
+                                            ChatMessage(
+                                                content = error ?: getString(R.string.empty_response),
+                                                isUser = false,
+                                                isError = true
+                                            )
+                                        )
+                                    }
                                 }
-                                chatAdapter.addMessage(
-                                    ChatMessage(
-                                        content = getString(R.string.error_server),
-                                        isUser = false,
-                                        isError = true
-                                    )
-                                )
-                            }
-                            error == "timeout" -> {
-                                if (chatAdapter.getLastMessage()?.content?.isEmpty() == true
-                                    && chatAdapter.getLastMessage()?.isUser == false) {
-                                    chatAdapter.removeLastMessage()
-                                }
-                                chatAdapter.addMessage(
-                                    ChatMessage(
-                                        content = getString(R.string.response_timeout),
-                                        isUser = false,
-                                        isError = true
-                                    )
-                                )
-                            }
-                            success && response.isNotEmpty() -> {
-                                if (sessionId.isNotEmpty()) {
-                                    settingsManager.sessionId = sessionId
-                                }
-                                // Update with final clean response
-                                chatAdapter.updateLastMessage(response)
-                            }
-                            else -> {
-                                if (chatAdapter.getLastMessage()?.content?.isEmpty() == true
-                                    && chatAdapter.getLastMessage()?.isUser == false) {
-                                    chatAdapter.removeLastMessage()
-                                }
-                                chatAdapter.addMessage(
-                                    ChatMessage(
-                                        content = error ?: getString(R.string.empty_response),
-                                        isUser = false,
-                                        isError = true
-                                    )
-                                )
+                                scrollToBottom()
+                            } catch (e: Exception) {
+                                Log.e("HermesChat", "Complete UI error: ${e.message}")
+                                isSending = false
+                                btnSend.isEnabled = true
                             }
                         }
-                        scrollToBottom()
+                    } catch (_: Exception) {
+                        isSending = false
                     }
                 }
             })
@@ -217,17 +238,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private suspend fun checkServerStatus() {
-        val isOnline = hermesClient.checkStatus()
-        val dot = statusDot.background as? GradientDrawable
-        runOnUiThread {
-            if (isOnline) {
-                statusText.text = getString(R.string.connected)
-                dot?.setColor(getColor(R.color.status_connected))
-            } else {
-                statusText.text = getString(R.string.disconnected)
-                dot?.setColor(getColor(R.color.status_disconnected))
+        try {
+            val isOnline = hermesClient.checkStatus()
+            val dot = statusDot.background as? GradientDrawable
+            runOnUiThread {
+                try {
+                    if (isOnline) {
+                        statusText.text = getString(R.string.connected)
+                        dot?.setColor(getColor(R.color.status_connected))
+                    } else {
+                        statusText.text = getString(R.string.disconnected)
+                        dot?.setColor(getColor(R.color.status_disconnected))
+                    }
+                } catch (_: Exception) { }
             }
-        }
+        } catch (_: Exception) { }
     }
 
     override fun onResume() {

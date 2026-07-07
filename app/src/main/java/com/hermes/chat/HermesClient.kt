@@ -26,19 +26,13 @@ class HermesClient(private val settings: SettingsManager) {
         val error: String? = null
     )
 
-    /**
-     * Streaming callback interface.
-     */
     interface StreamCallback {
-        /** Called for each text chunk received. */
         fun onChunk(text: String)
-        /** Called when streaming is complete. */
         fun onComplete(response: String, sessionId: String, success: Boolean, error: String?)
     }
 
     /**
      * Send a message and stream the response via SSE.
-     * Reads "event: chunk" and "event: done" from the SSE stream.
      */
     suspend fun sendMessageStream(
         message: String,
@@ -55,53 +49,68 @@ class HermesClient(private val settings: SettingsManager) {
                 .post(jsonBody.toString().toRequestBody("application/json".toMediaType()))
                 .build()
 
-            client.newCall(request).execute().use { response ->
+            val response = client.newCall(request).execute()
+            try {
                 if (!response.isSuccessful) {
                     callback.onComplete("", settings.sessionId, false, "http_${response.code}")
-                    return@use
+                    return@withContext
                 }
 
-                val reader = BufferedReader(InputStreamReader(response.body?.byteStream() ?: return@use))
+                val body = response.body
+                if (body == null) {
+                    callback.onComplete("", settings.sessionId, false, "empty_body")
+                    return@withContext
+                }
+
+                val reader = BufferedReader(InputStreamReader(body.byteStream()))
                 var currentEvent = ""
                 var fullResponse = ""
 
-                while (true) {
-                    val line = reader.readLine() ?: break
-                    when {
-                        line.startsWith("event: ") -> {
-                            currentEvent = line.removePrefix("event: ").trim()
-                        }
-                        line.startsWith("data: ") -> {
-                            val data = line.removePrefix("data: ").trim()
-                            if (data == "[DONE]") break
+                try {
+                    while (true) {
+                        val line = reader.readLine() ?: break
+                        when {
+                            line.startsWith("event: ") -> {
+                                currentEvent = line.removePrefix("event: ").trim()
+                            }
+                            line.startsWith("data: ") -> {
+                                val data = line.removePrefix("data: ").trim()
+                                if (data == "[DONE]") break
 
-                            try {
-                                val json = JSONObject(data)
-                                when (currentEvent) {
-                                    "chunk" -> {
-                                        val text = json.optString("text", "")
-                                        if (text.isNotEmpty()) {
-                                            fullResponse += text
-                                            callback.onChunk(text)
+                                try {
+                                    val json = JSONObject(data)
+                                    when (currentEvent) {
+                                        "chunk" -> {
+                                            val text = json.optString("text", "")
+                                            if (text.isNotEmpty()) {
+                                                fullResponse += text
+                                                try {
+                                                    callback.onChunk(text)
+                                                } catch (_: Exception) { }
+                                            }
+                                        }
+                                        "done" -> {
+                                            val finalResponse = json.optString("response", fullResponse)
+                                            val sessionId = json.optString("session_id", settings.sessionId)
+                                            val success = json.optBoolean("success", false)
+                                            val error = json.optString("error", "").ifEmpty { null }
+                                            callback.onComplete(finalResponse, sessionId, success, error)
+                                            return@withContext
                                         }
                                     }
-                                    "done" -> {
-                                        val finalResponse = json.optString("response", fullResponse)
-                                        val sessionId = json.optString("session_id", settings.sessionId)
-                                        val success = json.optBoolean("success", false)
-                                        val error = json.optString("error", "").ifEmpty { null }
-                                        callback.onComplete(finalResponse, sessionId, success, error)
-                                        return@use
-                                    }
-                                }
-                            } catch (_: Exception) { }
+                                } catch (_: Exception) { }
+                            }
                         }
                     }
-                }
+                } catch (_: Exception) { }
 
-                // If we got here without a "done" event, use accumulated response
+                // Fallback if no "done" event received
                 callback.onComplete(fullResponse, settings.sessionId, true, null)
+
+            } finally {
+                try { response.close() } catch (_: Exception) { }
             }
+
         } catch (e: java.net.ConnectException) {
             callback.onComplete("", settings.sessionId, false, "connection_error")
         } catch (e: java.util.concurrent.TimeoutException) {
@@ -112,7 +121,7 @@ class HermesClient(private val settings: SettingsManager) {
     }
 
     /**
-     * One-shot send (non-streaming). For backward compatibility.
+     * One-shot send (non-streaming). Fallback.
      */
     suspend fun sendMessage(message: String): ChatResponse = withContext(Dispatchers.IO) {
         try {
@@ -151,7 +160,10 @@ class HermesClient(private val settings: SettingsManager) {
                 .url("${settings.serverUrl}/status")
                 .get()
                 .build()
-            client.newCall(request).execute().isSuccessful
+            val response = client.newCall(request).execute()
+            val result = response.isSuccessful
+            response.close()
+            result
         } catch (e: Exception) {
             false
         }
@@ -166,8 +178,12 @@ class HermesClient(private val settings: SettingsManager) {
             val response = client.newCall(request).execute()
             if (response.isSuccessful) {
                 settings.clearSession()
+                response.close()
                 true
-            } else false
+            } else {
+                response.close()
+                false
+            }
         } catch (e: Exception) {
             false
         }
