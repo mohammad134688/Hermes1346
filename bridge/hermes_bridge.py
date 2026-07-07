@@ -16,7 +16,7 @@ Requirements:
   - Hermes Agent installed inside Ubuntu
 
 Start:
-  nohup python3 hermes_bridge.py > /tmp/hermes_bridge.log 2>&1 &
+  nohup python3 hermes_bridge.py > ~/hermes_bridge.log 2>&1 &
 """
 
 import argparse
@@ -47,7 +47,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("/tmp/hermes_bridge.log", encoding="utf-8"),
+        logging.FileHandler(os.path.join(os.path.expanduser("~"), "hermes_bridge.log"), encoding="utf-8"),
     ],
 )
 log = logging.getLogger("hermes-bridge")

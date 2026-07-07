@@ -10,8 +10,8 @@ set -e
 PORT=${HERMES_CHAT_PORT:-8765}
 PROOT_DISTRO=${HERMES_PROOT_DISTRO:-ubuntu}
 PROOT_USER=${HERMES_PROOT_USER:-root}
-LOG_FILE="/tmp/hermes_bridge.log"
-PID_FILE="/tmp/hermes_bridge.pid"
+LOG_FILE="$HOME/hermes_bridge.log"
+PID_FILE="$HOME/hermes_bridge.pid"
 
 # Colors
 RED='\033[0;31m'
