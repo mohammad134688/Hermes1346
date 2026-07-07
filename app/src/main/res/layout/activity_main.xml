@@ -125,7 +125,7 @@
             app:fabSize="mini"
             app:backgroundTint="@color/primary"
             app:tint="@color/white"
-            app: elevation="4dp" />
+            app:elevation="4dp" />
     </LinearLayout>
 
 </LinearLayout>
