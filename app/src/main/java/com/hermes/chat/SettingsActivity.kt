@@ -48,13 +48,13 @@ class SettingsActivity : AppCompatActivity() {
     private fun testConnection() {
         val url = editServerUrl.text?.toString()?.trim()
         if (url.isNullOrEmpty()) {
-            Toast.makeText(this, "آدرس سرور را وارد کنید", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.enter_server_url), Toast.LENGTH_SHORT).show()
             return
         }
 
         settingsManager.serverUrl = url
         btnTestConnection.isEnabled = false
-        btnTestConnection.text = "در حال تست..."
+        btnTestConnection.text = getString(R.string.testing)
 
         lifecycleScope.launch {
             val client = HermesClient(settingsManager)
@@ -62,7 +62,7 @@ class SettingsActivity : AppCompatActivity() {
 
             runOnUiThread {
                 btnTestConnection.isEnabled = true
-                btnTestConnection.text = "تست اتصال"
+                btnTestConnection.text = getString(R.string.test_connection)
 
                 if (isOnline) {
                     Toast.makeText(
@@ -73,7 +73,7 @@ class SettingsActivity : AppCompatActivity() {
                 } else {
                     Toast.makeText(
                         this@SettingsActivity,
-                        "❌ اتصال ناموفق! سرور را بررسی کنید.",
+                        getString(R.string.connection_failed),
                         Toast.LENGTH_LONG
                     ).show()
                 }

@@ -131,7 +131,7 @@ class MainActivity : AppCompatActivity() {
                 response.error == "connection_error" -> {
                     chatAdapter.addMessage(
                         ChatMessage(
-                            content = "⚠️ خطا در اتصال به سرور!\n\nلطفاً مطمئن شوید bridge server در Termux در حال اجراست:\n\n`nohup python3 hermes_bridge.py &`",
+                            content = getString(R.string.error_server),
                             isUser = false,
                             isError = true
                         )
@@ -140,7 +140,7 @@ class MainActivity : AppCompatActivity() {
                 response.error == "timeout" -> {
                     chatAdapter.addMessage(
                         ChatMessage(
-                            content = "⏱️ پاسخ دیر شد. Hermes ممکن است مشغول اجرای ابزار باشد.",
+                            content = getString(R.string.response_timeout),
                             isUser = false,
                             isError = true
                         )
@@ -158,7 +158,7 @@ class MainActivity : AppCompatActivity() {
                 else -> {
                     chatAdapter.addMessage(
                         ChatMessage(
-                            content = response.error ?: "پاسخ خالی دریافت شد",
+                            content = response.error ?: getString(R.string.empty_response),
                             isUser = false,
                             isError = true
                         )
