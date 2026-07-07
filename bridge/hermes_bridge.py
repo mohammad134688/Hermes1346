@@ -98,8 +98,8 @@ class HermesExecutor:
                 f"proot-distro login {self.distro} "
                 f"--user {self.user} "
                 f"-- bash -c 'cd {self.work_dir} && "
-                f"hermes chat -Q -q --yolo \"{escaped_msg}\" "
-                f"--resume {session_id} 2>/dev/null'"
+                f"hermes chat -Q -q --yolo --max-turns 20 \"{escaped_msg}\" "
+                f"--resume {session_id}'"
             )
         else:
 
@@ -107,7 +107,7 @@ class HermesExecutor:
                 f"proot-distro login {self.distro} "
                 f"--user {self.user} "
                 f"-- bash -c 'cd {self.work_dir} && "
-                f"hermes chat -Q -q --yolo \"{escaped_msg}\" 2>/dev/null'"
+                f"hermes chat -Q -q --yolo --max-turns 20 \"{escaped_msg}\"'"
             )
         return cmd
 
@@ -142,8 +142,11 @@ class HermesExecutor:
             output = result.stdout.strip()
             stderr = result.stderr.strip()
 
-            if result.returncode != 0 and stderr:
-                log.warning(f"Hermes stderr: {stderr[:200]}")
+            log.info(f"Exit code: {result.returncode}, stdout len: {len(output)}, stderr len: {len(stderr)}")
+            if stderr:
+                log.warning(f"Hermes stderr: {stderr[:300]}")
+            if not output:
+                log.warning(f"Empty output! stderr: {stderr[:500]}")
 
             # Try to extract session ID from output
             new_session_id = self._extract_session_id(output)
