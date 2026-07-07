@@ -98,7 +98,7 @@ class HermesExecutor:
                 f"proot-distro login {self.distro} "
                 f"--user {self.user} "
                 f"-- bash -c 'cd {self.work_dir} && "
-                f"hermes chat -Q -q --yolo -t terminal,file,web \"{escaped_msg}\" "
+                f"hermes chat -Q -q --yolo \"{escaped_msg}\" "
                 f"--resume {session_id} 2>/dev/null'"
             )
         else:
@@ -107,7 +107,7 @@ class HermesExecutor:
                 f"proot-distro login {self.distro} "
                 f"--user {self.user} "
                 f"-- bash -c 'cd {self.work_dir} && "
-                f"hermes chat -Q -q --yolo -t terminal,file,web \"{escaped_msg}\" 2>/dev/null'"
+                f"hermes chat -Q -q --yolo \"{escaped_msg}\" 2>/dev/null'"
             )
         return cmd
 
