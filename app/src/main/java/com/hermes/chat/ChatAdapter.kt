@@ -5,6 +5,9 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class ChatAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
@@ -63,6 +66,31 @@ class ChatAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         notifyItemInserted(messages.size - 1)
     }
 
+    /**
+     * Update the last message's content (for streaming).
+     * Appends new text to the last bot message and notifies the adapter.
+     */
+    fun appendToLastMessage(text: String) {
+        if (messages.isNotEmpty()) {
+            val lastIdx = messages.size - 1
+            messages[lastIdx] = messages[lastIdx].copy(
+                content = messages[lastIdx].content + text
+            )
+            notifyItemChanged(lastIdx)
+        }
+    }
+
+    /**
+     * Update the last message's content (replace, not append).
+     */
+    fun updateLastMessage(content: String) {
+        if (messages.isNotEmpty()) {
+            val lastIdx = messages.size - 1
+            messages[lastIdx] = messages[lastIdx].copy(content = content)
+            notifyItemChanged(lastIdx)
+        }
+    }
+
     fun removeLastMessage() {
         if (messages.isNotEmpty()) {
             val last = messages.size - 1
@@ -80,35 +108,22 @@ class ChatAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
     }
 
     private fun renderMarkdown(text: String): String {
-        // Basic markdown rendering for Android TextView
-        // Convert **bold** and *italic* and `code`
         var result = text
-
-        // Handle code blocks first (```...```)
-        result = result.replace(Regex("```([\\s\\S]*?)```")) { match ->
+        result = result.replace(Regex("```([\\\\s\\\\S]*?)```")) { match ->
             "\n${match.groupValues[1].trim()}\n"
         }
-
-        // Handle inline code
         result = result.replace(Regex("`([^`]+)`")) { match ->
             match.groupValues[1]
         }
-
-        // Handle bold
         result = result.replace(Regex("\\*\\*([^*]+)\\*\\*")) { match ->
             match.groupValues[1]
         }
-
-        // Handle italic
         result = result.replace(Regex("\\*([^*]+)\\*")) { match ->
             match.groupValues[1]
         }
-
-        // Handle strikethrough
         result = result.replace(Regex("~~([^~]+)~~")) { match ->
             match.groupValues[1]
         }
-
         return result
     }
 }

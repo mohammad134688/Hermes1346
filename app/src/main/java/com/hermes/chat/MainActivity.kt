@@ -65,27 +65,21 @@ class MainActivity : AppCompatActivity() {
         recyclerView.apply {
             this.layoutManager = layoutManager
             adapter = chatAdapter
-            itemAnimator = null  // Smoother without animation
+            itemAnimator = null
         }
     }
 
     private fun setupClickListeners() {
-        btnSend.setOnClickListener {
-            sendMessage()
-        }
-
+        btnSend.setOnClickListener { sendMessage() }
         btnSettings.setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
-
         editMessage.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEND) {
                 sendMessage()
                 true
             } else false
         }
-
-        // Scroll to bottom when keyboard appears
         recyclerView.addOnLayoutChangeListener { _, _, _, _, bottom, _, _, _, oldBottom ->
             if (bottom < oldBottom) {
                 recyclerView.post {
@@ -119,54 +113,84 @@ class MainActivity : AppCompatActivity() {
         // Show typing indicator
         showTyping(true)
 
-        // Send to Hermes
+        // Send with streaming
         lifecycleScope.launch {
-            val response = hermesClient.sendMessage(message)
-
-            showTyping(false)
-            isSending = false
-            btnSend.isEnabled = true
-
-            when {
-                response.error == "connection_error" -> {
-                    chatAdapter.addMessage(
-                        ChatMessage(
-                            content = getString(R.string.error_server),
-                            isUser = false,
-                            isError = true
-                        )
-                    )
-                }
-                response.error == "timeout" -> {
-                    chatAdapter.addMessage(
-                        ChatMessage(
-                            content = getString(R.string.response_timeout),
-                            isUser = false,
-                            isError = true
-                        )
-                    )
-                }
-                response.success && response.response.isNotEmpty() -> {
-                    // Save session ID
-                    if (response.sessionId.isNotEmpty()) {
-                        settingsManager.sessionId = response.sessionId
+            hermesClient.sendMessageStream(message, object : HermesClient.StreamCallback {
+                override fun onChunk(text: String) {
+                    runOnUiThread {
+                        // First chunk: hide typing indicator and add empty bot message
+                        if (chatAdapter.getLastMessage()?.isUser == true || chatAdapter.getLastMessage() == null) {
+                            chatAdapter.addMessage(ChatMessage(content = "", isUser = false))
+                        }
+                        chatAdapter.appendToLastMessage(text)
+                        scrollToBottom()
                     }
-                    chatAdapter.addMessage(
-                        ChatMessage(content = response.response, isUser = false)
-                    )
                 }
-                else -> {
-                    chatAdapter.addMessage(
-                        ChatMessage(
-                            content = response.error ?: getString(R.string.empty_response),
-                            isUser = false,
-                            isError = true
-                        )
-                    )
-                }
-            }
 
-            scrollToBottom()
+                override fun onComplete(
+                    response: String,
+                    sessionId: String,
+                    success: Boolean,
+                    error: String?
+                ) {
+                    runOnUiThread {
+                        showTyping(false)
+                        isSending = false
+                        btnSend.isEnabled = true
+
+                        when {
+                            error == "connection_error" -> {
+                                // Remove the empty bot message if added
+                                if (chatAdapter.getLastMessage()?.content?.isEmpty() == true
+                                    && chatAdapter.getLastMessage()?.isUser == false) {
+                                    chatAdapter.removeLastMessage()
+                                }
+                                chatAdapter.addMessage(
+                                    ChatMessage(
+                                        content = getString(R.string.error_server),
+                                        isUser = false,
+                                        isError = true
+                                    )
+                                )
+                            }
+                            error == "timeout" -> {
+                                if (chatAdapter.getLastMessage()?.content?.isEmpty() == true
+                                    && chatAdapter.getLastMessage()?.isUser == false) {
+                                    chatAdapter.removeLastMessage()
+                                }
+                                chatAdapter.addMessage(
+                                    ChatMessage(
+                                        content = getString(R.string.response_timeout),
+                                        isUser = false,
+                                        isError = true
+                                    )
+                                )
+                            }
+                            success && response.isNotEmpty() -> {
+                                if (sessionId.isNotEmpty()) {
+                                    settingsManager.sessionId = sessionId
+                                }
+                                // Update with final clean response
+                                chatAdapter.updateLastMessage(response)
+                            }
+                            else -> {
+                                if (chatAdapter.getLastMessage()?.content?.isEmpty() == true
+                                    && chatAdapter.getLastMessage()?.isUser == false) {
+                                    chatAdapter.removeLastMessage()
+                                }
+                                chatAdapter.addMessage(
+                                    ChatMessage(
+                                        content = error ?: getString(R.string.empty_response),
+                                        isUser = false,
+                                        isError = true
+                                    )
+                                )
+                            }
+                        }
+                        scrollToBottom()
+                    }
+                }
+            })
         }
     }
 
@@ -187,7 +211,7 @@ class MainActivity : AppCompatActivity() {
         statusCheckJob = lifecycleScope.launch {
             while (true) {
                 checkServerStatus()
-                delay(5000) // Check every 5 seconds
+                delay(5000)
             }
         }
     }
@@ -195,7 +219,6 @@ class MainActivity : AppCompatActivity() {
     private suspend fun checkServerStatus() {
         val isOnline = hermesClient.checkStatus()
         val dot = statusDot.background as? GradientDrawable
-
         runOnUiThread {
             if (isOnline) {
                 statusText.text = getString(R.string.connected)
@@ -209,13 +232,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (statusCheckJob == null) {
-            startStatusChecker()
-        }
+        if (statusCheckJob == null) startStatusChecker()
     }
 
     override fun onPause() {
-        super.onPause()
         statusCheckJob?.cancel()
         statusCheckJob = null
     }

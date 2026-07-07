@@ -7,13 +7,15 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import java.util.concurrent.TimeUnit
 
 class HermesClient(private val settings: SettingsManager) {
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(120, TimeUnit.SECONDS)  // Hermes can take a while
+        .readTimeout(120, TimeUnit.SECONDS)
         .writeTimeout(10, TimeUnit.SECONDS)
         .build()
 
@@ -24,6 +26,94 @@ class HermesClient(private val settings: SettingsManager) {
         val error: String? = null
     )
 
+    /**
+     * Streaming callback interface.
+     */
+    interface StreamCallback {
+        /** Called for each text chunk received. */
+        fun onChunk(text: String)
+        /** Called when streaming is complete. */
+        fun onComplete(response: String, sessionId: String, success: Boolean, error: String?)
+    }
+
+    /**
+     * Send a message and stream the response via SSE.
+     * Reads "event: chunk" and "event: done" from the SSE stream.
+     */
+    suspend fun sendMessageStream(
+        message: String,
+        callback: StreamCallback
+    ) = withContext(Dispatchers.IO) {
+        try {
+            val jsonBody = JSONObject().apply {
+                put("message", message)
+                put("session_id", settings.sessionId)
+            }
+
+            val request = Request.Builder()
+                .url("${settings.serverUrl}/chat/stream")
+                .post(jsonBody.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    callback.onComplete("", settings.sessionId, false, "http_${response.code}")
+                    return@use
+                }
+
+                val reader = BufferedReader(InputStreamReader(response.body?.byteStream() ?: return@use))
+                var currentEvent = ""
+                var fullResponse = ""
+
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    when {
+                        line.startsWith("event: ") -> {
+                            currentEvent = line.removePrefix("event: ").trim()
+                        }
+                        line.startsWith("data: ") -> {
+                            val data = line.removePrefix("data: ").trim()
+                            if (data == "[DONE]") break
+
+                            try {
+                                val json = JSONObject(data)
+                                when (currentEvent) {
+                                    "chunk" -> {
+                                        val text = json.optString("text", "")
+                                        if (text.isNotEmpty()) {
+                                            fullResponse += text
+                                            callback.onChunk(text)
+                                        }
+                                    }
+                                    "done" -> {
+                                        val finalResponse = json.optString("response", fullResponse)
+                                        val sessionId = json.optString("session_id", settings.sessionId)
+                                        val success = json.optBoolean("success", false)
+                                        val error = json.optString("error", "").ifEmpty { null }
+                                        callback.onComplete(finalResponse, sessionId, success, error)
+                                        return@use
+                                    }
+                                }
+                            } catch (_: Exception) { }
+                        }
+                    }
+                }
+
+                // If we got here without a "done" event, use accumulated response
+                callback.onComplete(fullResponse, settings.sessionId, true, null)
+            }
+        } catch (e: java.net.ConnectException) {
+            callback.onComplete("", settings.sessionId, false, "connection_error")
+        } catch (e: java.util.concurrent.TimeoutException) {
+            callback.onComplete("", settings.sessionId, false, "timeout")
+        } catch (e: Exception) {
+            callback.onComplete("", settings.sessionId, false, e.message ?: "unknown_error")
+        }
+    }
+
+    /**
+     * One-shot send (non-streaming). For backward compatibility.
+     */
     suspend fun sendMessage(message: String): ChatResponse = withContext(Dispatchers.IO) {
         try {
             val jsonBody = JSONObject().apply {
@@ -47,26 +137,11 @@ class HermesClient(private val settings: SettingsManager) {
                 error = json.optString("error", null)
             )
         } catch (e: java.net.ConnectException) {
-            ChatResponse(
-                response = "",
-                sessionId = settings.sessionId,
-                success = false,
-                error = "connection_error"
-            )
+            ChatResponse(response = "", sessionId = settings.sessionId, success = false, error = "connection_error")
         } catch (e: java.util.concurrent.TimeoutException) {
-            ChatResponse(
-                response = "",
-                sessionId = settings.sessionId,
-                success = false,
-                error = "timeout"
-            )
+            ChatResponse(response = "", sessionId = settings.sessionId, success = false, error = "timeout")
         } catch (e: Exception) {
-            ChatResponse(
-                response = "",
-                sessionId = settings.sessionId,
-                success = false,
-                error = e.message ?: "unknown_error"
-            )
+            ChatResponse(response = "", sessionId = settings.sessionId, success = false, error = e.message ?: "unknown_error")
         }
     }
 
@@ -76,9 +151,7 @@ class HermesClient(private val settings: SettingsManager) {
                 .url("${settings.serverUrl}/status")
                 .get()
                 .build()
-
-            val response = client.newCall(request).execute()
-            response.isSuccessful
+            client.newCall(request).execute().isSuccessful
         } catch (e: Exception) {
             false
         }
@@ -90,7 +163,6 @@ class HermesClient(private val settings: SettingsManager) {
                 .url("${settings.serverUrl}/new")
                 .post("{}".toRequestBody("application/json".toMediaType()))
                 .build()
-
             val response = client.newCall(request).execute()
             if (response.isSuccessful) {
                 settings.clearSession()

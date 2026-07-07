@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 """
-Hermes Chat Bridge Server
-=========================
+Hermes Chat Bridge Server (with Streaming)
+============================================
 Runs in Termux (NOT PRoot). Accepts HTTP requests from the Android app
 and forwards them to Hermes inside proot-distro Ubuntu.
+
+Supports:
+  - POST /chat      → One-shot (wait for full response)
+  - POST /chat/stream → SSE streaming (real-time chunks)
+  - GET  /status    → Server status
+  - GET  /health    → Health check
+  - POST /new       → New session
 
 Usage:
   python3 hermes_bridge.py                    # Default port 8765
   python3 hermes_bridge.py --port 8765        # Custom port
-  python3 hermes_bridge.py --proot-user root  # PRoot user (default: root)
-
-Requirements:
-  - Termux with Python 3
-  - proot-distro with Ubuntu installed
-  - Hermes Agent installed inside Ubuntu
-
-Start:
-  nohup python3 hermes_bridge.py > ~/hermes_bridge.log 2>&1 &
+  python3 hermes_bridge.py --proot-distro ubuntu  # PRoot distro
 """
 
 import argparse
@@ -38,7 +37,7 @@ DEFAULT_PORT = 8765
 DEFAULT_PROOT_USER = "root"
 DEFAULT_PROOT_DISTRO = "ubuntu"
 HERMES_WORK_DIR = "/root"
-COMMAND_TIMEOUT = 180  # 3 minutes max per hermes command
+COMMAND_TIMEOUT = 180
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
@@ -47,7 +46,10 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(os.path.join(os.path.expanduser("~"), "hermes_bridge.log"), encoding="utf-8"),
+        logging.FileHandler(
+            os.path.join(os.path.expanduser("~"), "hermes_bridge.log"),
+            encoding="utf-8",
+        ),
     ],
 )
 log = logging.getLogger("hermes-bridge")
@@ -55,8 +57,6 @@ log = logging.getLogger("hermes-bridge")
 # ─── Session Management ──────────────────────────────────────────────────────
 
 class SessionManager:
-    """Manages Hermes session IDs for conversation continuity."""
-
     def __init__(self):
         self._sessions: dict[str, dict] = {}
         self._lock = threading.Lock()
@@ -75,7 +75,6 @@ class SessionManager:
     def new_session_id(self) -> str:
         return f"hermeschat_{int(time.time() * 1000)}"
 
-
 sessions = SessionManager()
 
 # ─── Hermes Executor ─────────────────────────────────────────────────────────
@@ -89,10 +88,7 @@ class HermesExecutor:
         self.work_dir = work_dir
 
     def _build_command(self, message: str, session_id: str = "") -> str:
-        """Build the hermes command. Uses hermes -z for one-shot queries."""
         escaped_msg = message.replace("'", "'\\''")
-
-        # Use hermes -z for one-shot queries (like Telegram gateway does)
         if session_id:
             cmd = (
                 f"proot-distro login {self.distro} "
@@ -101,7 +97,6 @@ class HermesExecutor:
                 f"hermes -z \"{escaped_msg}\" --resume {session_id}'"
             )
         else:
-
             cmd = (
                 f"proot-distro login {self.distro} "
                 f"--user {self.user} "
@@ -111,9 +106,6 @@ class HermesExecutor:
         return cmd
 
     def _extract_session_id(self, output: str) -> str:
-        """Try to extract session ID from hermes output."""
-        # Hermes sometimes outputs session info, try to find it
-        # Pattern: "Session: xxxxxxxx" or "session_id: xxxxxxxx"
         patterns = [
             r"[Ss]ession[_ ]?[Ii][Dd]?[:\s]+([a-zA-Z0-9_]+)",
             r"Session\s+([a-zA-Z0-9_]+)",
@@ -124,33 +116,37 @@ class HermesExecutor:
                 return match.group(1)
         return ""
 
+    def _clean_output(self, text: str) -> str:
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        cleaned = ansi_escape.sub('', text)
+        lines = cleaned.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped and not cleaned_lines:
+                continue
+            cleaned_lines.append(line)
+        while cleaned_lines and not cleaned_lines[-1].strip():
+            cleaned_lines.pop()
+        return '\n'.join(cleaned_lines).strip()
+
     def chat(self, message: str, session_id: str = "") -> dict:
-        """Send a message to Hermes and return the response."""
+        """One-shot: wait for full response."""
         cmd = self._build_command(message, session_id)
-        log.info(f"Executing: hermes chat (session={session_id or 'new'})")
+        log.info(f"Chat (one-shot): session={session_id or 'new'}, len={len(message)}")
 
         try:
             result = subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=COMMAND_TIMEOUT,
+                cmd, shell=True, capture_output=True, text=True, timeout=COMMAND_TIMEOUT,
             )
-
             output = result.stdout.strip()
             stderr = result.stderr.strip()
 
-            log.info(f"Exit code: {result.returncode}, stdout len: {len(output)}, stderr len: {len(stderr)}")
+            log.info(f"Exit: {result.returncode}, stdout: {len(output)}, stderr: {len(stderr)}")
             if stderr:
-                log.warning(f"Hermes stderr: {stderr[:300]}")
-            if not output:
-                log.warning(f"Empty output! stderr: {stderr[:500]}")
+                log.warning(f"stderr: {stderr[:300]}")
 
-            # Try to extract session ID from output
             new_session_id = self._extract_session_id(output)
-
-            # Clean up output - remove ANSI codes and hermes-specific formatting
             cleaned = self._clean_output(output)
 
             return {
@@ -159,57 +155,77 @@ class HermesExecutor:
                 "success": True,
                 "error": None,
             }
+        except subprocess.TimeoutExpired:
+            log.error("Hermes timed out")
+            return {"response": "", "session_id": session_id, "success": False, "error": "timeout"}
+        except Exception as e:
+            log.error(f"Error: {e}")
+            return {"response": "", "session_id": session_id, "success": False, "error": str(e)}
+
+    def chat_stream(self, message: str, session_id: str = ""):
+        """
+        Streaming generator: yields chunks as they come.
+        Uses Popen to read stdout line by line.
+        """
+        cmd = self._build_command(message, session_id)
+        log.info(f"Chat (stream): session={session_id or 'new'}, len={len(message)}")
+
+        try:
+            process = subprocess.Popen(
+                cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, bufsize=1,
+            )
+
+            full_response = []
+            ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
+            # Read stdout line by line
+            for line in process.stdout:
+                line = line.rstrip('\n')
+                # Clean ANSI codes
+                clean_line = ansi_escape.sub('', line)
+                if clean_line:
+                    full_response.append(clean_line)
+                    yield {"type": "chunk", "text": clean_line}
+
+            process.wait(timeout=COMMAND_TIMEOUT)
+
+            stderr = process.stderr.read().strip()
+            if stderr:
+                log.warning(f"Stream stderr: {stderr[:300]}")
+
+            full_text = '\n'.join(full_response).strip()
+            new_session_id = self._extract_session_id(full_text)
+            cleaned = self._clean_output(full_text)
+
+            log.info(f"Stream done: {len(cleaned)} chars, exit={process.returncode}")
+
+            yield {
+                "type": "done",
+                "response": cleaned,
+                "session_id": new_session_id or session_id,
+                "success": process.returncode == 0,
+                "error": None if process.returncode == 0 else f"exit_code_{process.returncode}",
+            }
 
         except subprocess.TimeoutExpired:
-            log.error("Hermes command timed out")
-            return {
-                "response": "",
-                "session_id": session_id,
-                "success": False,
-                "error": "timeout",
-            }
+            log.error("Stream timed out")
+            process.kill()
+            yield {"type": "done", "response": "", "session_id": session_id,
+                   "success": False, "error": "timeout"}
         except Exception as e:
-            log.error(f"Execution error: {e}")
-            return {
-                "response": "",
-                "session_id": session_id,
-                "success": False,
-                "error": str(e),
-            }
-
-    def _clean_output(self, text: str) -> str:
-        """Remove ANSI escape codes and clean up hermes output."""
-        # Remove ANSI codes
-        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-        cleaned = ansi_escape.sub('', text)
-
-        # Remove common hermes artifacts
-        lines = cleaned.split('\n')
-        cleaned_lines = []
-        for line in lines:
-            stripped = line.strip()
-            # Skip empty lines at start/end
-            if not stripped and not cleaned_lines:
-                continue
-            cleaned_lines.append(line)
-
-        # Remove trailing empty lines
-        while cleaned_lines and not cleaned_lines[-1].strip():
-            cleaned_lines.pop()
-
-        return '\n'.join(cleaned_lines).strip()
+            log.error(f"Stream error: {e}")
+            yield {"type": "done", "response": "", "session_id": session_id,
+                   "success": False, "error": str(e)}
 
     def status(self) -> bool:
-        """Check if hermes is accessible."""
         try:
             cmd = (
                 f"proot-distro login {self.distro} "
                 f"--user {self.user} "
                 f"-- bash -c 'cd {self.work_dir} && hermes --version 2>/dev/null'"
             )
-            result = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True, timeout=15
-            )
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
             return result.returncode == 0
         except Exception:
             return False
@@ -218,18 +234,14 @@ class HermesExecutor:
 # ─── Threaded HTTP Server ────────────────────────────────────────────────────
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
-    """HTTPServer that handles each request in a new thread."""
     daemon_threads = True
 
 # ─── HTTP Handler ────────────────────────────────────────────────────────────
 
 class ChatHandler(BaseHTTPRequestHandler):
-    """HTTP request handler for the chat API."""
-
-    executor: HermesExecutor  # Set by main()
+    executor: HermesExecutor
 
     def log_message(self, format, *args):
-        """Override to use our logger."""
         log.info(f"{self.client_address[0]} - {format % args}")
 
     def do_GET(self):
@@ -243,23 +255,27 @@ class ChatHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/chat":
             self._handle_chat()
+        elif self.path == "/chat/stream":
+            self._handle_chat_stream()
         elif self.path == "/new":
             self._handle_new_session()
         else:
             self._send_json({"error": "not found"}, 404)
 
     def do_OPTIONS(self):
-        """Handle CORS preflight."""
         self.send_response(200)
         self._add_cors_headers()
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
+    def _read_body(self) -> dict:
+        length = int(self.headers.get("Content-Length", 0))
+        return json.loads(self.rfile.read(length))
+
     def _handle_chat(self):
         try:
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length))
+            body = self._read_body()
             message = body.get("message", "").strip()
             session_id = body.get("session_id", "")
 
@@ -267,37 +283,68 @@ class ChatHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "empty message"}, 400)
                 return
 
-            log.info(f"Chat request: session={session_id or 'new'}, len={len(message)}")
-
-            # Execute
             result = self.executor.chat(message, session_id)
-
-            # Update session
             if result["success"] and result["session_id"]:
                 sessions.save_session(result["session_id"])
-
             self._send_json(result)
 
         except json.JSONDecodeError:
             self._send_json({"error": "invalid json"}, 400)
         except Exception as e:
-            log.error(f"Chat handler error: {e}")
+            log.error(f"Chat error: {e}")
             self._send_json({"error": str(e)}, 500)
+
+    def _handle_chat_stream(self):
+        """SSE streaming endpoint."""
+        try:
+            body = self._read_body()
+            message = body.get("message", "").strip()
+            session_id = body.get("session_id", "")
+
+            if not message:
+                self._send_json({"error": "empty message"}, 400)
+                return
+
+            # Send SSE headers
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self._add_cors_headers()
+            self.end_headers()
+
+            # Stream chunks
+            for chunk in self.executor.chat_stream(message, session_id):
+                event_type = chunk.get("type", "chunk")
+                data = json.dumps(chunk, ensure_ascii=False)
+                self.wfile.write(f"event: {event_type}\ndata: {data}\n\n".encode("utf-8"))
+                self.wfile.flush()
+
+                # Save session when done
+                if event_type == "done" and chunk.get("session_id"):
+                    sessions.save_session(chunk["session_id"])
+
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+
+        except json.JSONDecodeError:
+            self._send_json({"error": "invalid json"}, 400)
+        except Exception as e:
+            log.error(f"Stream error: {e}")
+            try:
+                self.wfile.write(f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n".encode())
+                self.wfile.flush()
+            except Exception:
+                pass
 
     def _handle_new_session(self):
         session_id = sessions.new_session_id()
         sessions.save_session(session_id)
-        self._send_json({
-            "session_id": session_id,
-            "success": True,
-        })
+        self._send_json({"session_id": session_id, "success": True})
 
     def _handle_status(self):
         is_online = self.executor.status()
-        self._send_json({
-            "status": "online" if is_online else "offline",
-            "hermes": is_online,
-        })
+        self._send_json({"status": "online" if is_online else "offline", "hermes": is_online})
 
     def _send_json(self, data: dict, code: int = 200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -315,14 +362,13 @@ class ChatHandler(BaseHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser(description="Hermes Chat Bridge Server")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Port to listen on")
-    parser.add_argument("--host", default="127.0.0.1", help="Host to bind to")
-    parser.add_argument("--proot-distro", default=DEFAULT_PROOT_DISTRO, help="PRoot distro name")
-    parser.add_argument("--proot-user", default=DEFAULT_PROOT_USER, help="PRoot user")
-    parser.add_argument("--work-dir", default=HERMES_WORK_DIR, help="Hermes working directory")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--proot-distro", default=DEFAULT_PROOT_DISTRO)
+    parser.add_argument("--proot-user", default=DEFAULT_PROOT_USER)
+    parser.add_argument("--work-dir", default=HERMES_WORK_DIR)
     args = parser.parse_args()
 
-    # Create executor
     executor = HermesExecutor(
         distro=args.proot_distro,
         user=args.proot_user,
@@ -330,18 +376,16 @@ def main():
     )
     ChatHandler.executor = executor
 
-    # Quick health check
     log.info("Checking Hermes availability...")
     if executor.status():
         log.info("✅ Hermes is accessible")
     else:
         log.warning("⚠️  Hermes may not be accessible. Check proot-distro setup.")
 
-    # Start server
     server = ThreadedHTTPServer((args.host, args.port), ChatHandler)
     log.info(f"🚀 Hermes Bridge running on http://{args.host}:{args.port}")
+    log.info(f"   Endpoints: POST /chat | POST /chat/stream | GET /status")
     log.info(f"   Distro: {args.proot_distro}, User: {args.proot_user}")
-    log.info(f"   Work dir: {args.work_dir}")
     log.info(f"   Timeout: {COMMAND_TIMEOUT}s per command")
 
     try:
@@ -349,7 +393,6 @@ def main():
     except KeyboardInterrupt:
         log.info("Shutting down...")
         server.shutdown()
-
 
 if __name__ == "__main__":
     main()
