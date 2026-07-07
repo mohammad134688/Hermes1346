@@ -14,7 +14,7 @@
     <string name="light">Light</string>
     <string name="about">About</string>
     <string name="version">Version 1.0.0</string>
-    <string name="welcome_message">Hello! 👋\nI'm Ellie, your AI assistant.\nType a message to get started.</string>
+    <string name="welcome_message">Hello!\nI\'m Ellie, your AI assistant.\nType a message to get started.</string>
     <string name="error_connection">Connection error</string>
     <string name="error_timeout">Response timed out</string>
     <string name="copy">Copy</string>
@@ -22,13 +22,9 @@
     <string name="test_connection">Test Connection</string>
     <string name="testing">Testing...</string>
     <string name="enter_server_url">Please enter a server URL</string>
-    <string name="connection_success">✅ Connected successfully!</string>
-    <string name="connection_failed">❌ Connection failed! Check the server.</string>
-    <string name="error_server">⚠️ Error connecting to server!
-
-Make sure the bridge server is running in Termux:
-
-`nohup python3 hermes_bridge.py &amp;`</string>
-    <string name="response_timeout">⏱️ Response timed out. Hermes may be running a tool.</string>
+    <string name="connection_success">Connected successfully!</string>
+    <string name="connection_failed">Connection failed! Check the server.</string>
+    <string name="error_server">Error connecting to server!\n\nMake sure the bridge server is running in Termux:\n\nnohup python3 hermes_bridge.py &amp;</string>
+    <string name="response_timeout">Response timed out. Hermes may be running a tool.</string>
     <string name="empty_response">Empty response received</string>
 </resources>
