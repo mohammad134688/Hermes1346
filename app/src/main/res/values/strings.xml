@@ -28,7 +28,7 @@
 
 Make sure the bridge server is running in Termux:
 
-`nohup python3 hermes_bridge.py &`</string>
+`nohup python3 hermes_bridge.py &amp;`</string>
     <string name="response_timeout">⏱️ Response timed out. Hermes may be running a tool.</string>
     <string name="empty_response">Empty response received</string>
 </resources>
