@@ -1,0 +1,3 @@
+-keep class com.hermes.chat.** { *; }
+-keep class okhttp3.** { *; }
+-keep class okio.** { *; }

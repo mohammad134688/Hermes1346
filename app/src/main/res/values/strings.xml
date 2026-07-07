@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">HermesChat</string>
+    <string name="hint_message">پیام خود را بنویسید...</string>
+    <string name="connecting">در حال اتصال...</string>
+    <string name="connected">متصل</string>
+    <string name="disconnected">قطع ارتباط</string>
+    <string name="typing">Hermes در حال پاسخ‌دهی...</string>
+    <string name="settings">تنظیمات</string>
+    <string name="new_chat">چت جدید</string>
+    <string name="server_url">آدرس سرور</string>
+    <string name="theme">تم</string>
+    <string name="dark">تاریک</string>
+    <string name="light">روشن</string>
+    <string name="about">درباره</string>
+    <string name="version">نسخه 1.0.0</string>
+    <string name="welcome_message">سلام! 👋\nمن Ellie هستم، دستیار هوش مصنوعی شما.\nپیام خود را بنویسید تا شروع کنیم.</string>
+    <string name="error_connection">خطا در اتصال به سرور</string>
+    <string name="error_timeout">پاسخ دیر شد</string>
+    <string name="copy">کپی</string>
+    <string name="share">اشتراک‌گذاری</string>
+</resources>
