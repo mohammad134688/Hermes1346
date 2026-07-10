@@ -201,11 +201,25 @@ class HermesHandler(BaseHTTPRequestHandler):
             self._send_json(400, {"error": "No messages provided"})
             return
 
-        # Build the user message — take the last user message
+        # Extract the last user message (handles both string and multimodal content)
         user_message = ""
         for msg in reversed(messages):
             if msg.get("role") == "user":
-                user_message = msg.get("content", "")
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    user_message = content
+                elif isinstance(content, list):
+                    # Multimodal: extract text parts, skip images
+                    parts = []
+                    for part in content:
+                        if isinstance(part, dict):
+                            if part.get("type") == "text":
+                                parts.append(part.get("text", ""))
+                            elif part.get("type") == "image_url":
+                                parts.append("[Image attached]")
+                        elif isinstance(part, str):
+                            parts.append(part)
+                    user_message = " ".join(parts) if parts else "[Image only — no text]"
                 break
 
         if not user_message:
