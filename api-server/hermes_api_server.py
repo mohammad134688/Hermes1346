@@ -24,10 +24,35 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
 # ── Config ──────────────────────────────────────────────────────────────
-HERMES_CMD = "hermes"
 DEFAULT_PORT = 8080
 DEFAULT_HOST = "0.0.0.0"
 API_KEY = "hermes-local-key"  # Any string — local only, no real auth needed
+
+
+def _find_hermes() -> str:
+    """Find the hermes binary — check common locations."""
+    import shutil
+    # 1. In PATH
+    found = shutil.which("hermes")
+    if found:
+        return found
+    # 2. Common install locations
+    for path in [
+        "/usr/local/bin/hermes",
+        "/root/.local/bin/hermes",
+        "$HOME/.local/bin/hermes",
+        "/data/data/com.termux/files/usr/bin/hermes",
+        "/data/data/com.termux/files/home/.local/bin/hermes",
+    ]:
+        import os
+        expanded = os.path.expandvars(path)
+        if os.path.isfile(expanded):
+            return expanded
+    # 3. Try finding via python -m
+    return "hermes"  # fallback — will error if not found
+
+
+HERMES_CMD = _find_hermes()
 
 # ── Models endpoint ─────────────────────────────────────────────────────
 MODELS_RESPONSE = {
@@ -48,13 +73,23 @@ MODELS_RESPONSE = {
 
 def call_hermes(message: str, timeout: int = 300) -> str:
     """Send a message to Hermes and return the response."""
+    import os
+    env = {**os.environ, "HERMES_NONINTERACTIVE": "1"}
+    # Ensure common bin dirs are in PATH for subprocess
+    extra_paths = [
+        os.path.expanduser("~/.local/bin"),
+        "/usr/local/bin",
+        "/data/data/com.termux/files/usr/bin",
+    ]
+    current_path = env.get("PATH", "")
+    env["PATH"] = ":".join(extra_paths) + ":" + current_path
     try:
         result = subprocess.run(
             [HERMES_CMD, "-z", message],
             capture_output=True,
             text=True,
             timeout=timeout,
-            env={**__import__("os").environ, "HERMES_NONINTERACTIVE": "1"},
+            env=env,
         )
         output = result.stdout.strip()
         if not output and result.stderr:
@@ -282,8 +317,14 @@ def main():
     parser = argparse.ArgumentParser(description="Hermes API Server")
     parser.add_argument("--host", default=DEFAULT_HOST, help=f"Bind host (default: {DEFAULT_HOST})")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Bind port (default: {DEFAULT_PORT})")
+    parser.add_argument("--hermes-path", default=None, help="Full path to hermes binary (auto-detected if omitted)")
     args = parser.parse_args()
 
+    global HERMES_CMD
+    if args.hermes_path:
+        HERMES_CMD = args.hermes_path
+
+    print(f"🔍 Hermes binary: {HERMES_CMD}")
     server = HTTPServer((args.host, args.port), HermesHandler)
 
     print(f"""
